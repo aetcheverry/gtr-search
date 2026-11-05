@@ -52,6 +52,77 @@ What happens to them:
 
 Defaults for most options can be changed at the top of the script. Run `python gtr_search.py -h` for the full list.
 
+## Allowed values
+
+Values are case-sensitive and must be typed as shown. Put lists in double quotes and separate items with commas, e.g. `--region "North West,Wales"`. Several values in one option mean "any of these"; different options combine as "all of these".
+
+**`--funder`**: GtR treats this as an open list that changes over time. Current values:
+
+| Value | Funder |
+|---|---|
+| `AHRC` | Arts and Humanities Research Council |
+| `BBSRC` | Biotechnology and Biological Sciences Research Council |
+| `EPSRC` | Engineering and Physical Sciences Research Council |
+| `ESRC` | Economic and Social Research Council |
+| `Innovate UK` | Innovate UK (business-led projects) |
+| `MRC` | Medical Research Council |
+| `NERC` | Natural Environment Research Council |
+| `STFC` | Science and Technology Facilities Council |
+| `Research England` | Research England |
+| `Horizon Europe Guarantee` | UK guarantee funding for Horizon Europe awards |
+| `all` | No funder filter (script option, not a GtR value) |
+
+Cross-council schemes such as Future Leaders Fellowships may be listed under a funder name not shown here. To find them, search with `--funder all` and check the `funder` column.
+
+**`--status`**: `active` (project still running), `closed` (project finished) or `both`.
+
+**`--region`**: region of the lead organisation (UK ITL1 regions, a fixed list):
+
+`North East`, `North West`, `Yorkshire and the Humber`, `East Midlands`, `West Midlands`, `East of England`, `London`, `South East`, `South West`, `Wales`, `Scotland`, `Northern Ireland`, `Channel Islands`, `Non-UK`, `Unknown`
+
+**`--category`**: type of award. GtR treats this as an open list that it revises occasionally. Common values:
+
+| Value | Typical use |
+|---|---|
+| `Research Grant` | Standard research council grants |
+| `Fellowship` | Personal fellowships |
+| `Training Grant` | Doctoral training and similar training awards |
+| `Studentship` | Individual PhD studentships (numeric grant references, usually no PI) |
+| `EU-Funded` | Awards funded through EU programmes |
+| `Collaborative R&D` | Innovate UK collaborative projects (seen in results) |
+
+The `category` column of any results file shows the values in use for your search.
+
+**`--amount`**: total value of the award:
+
+| Value | Meaning |
+|---|---|
+| `lt100k` | Less than £100k |
+| `100k-1m` | £100k to £1m |
+| `1m-10m` | £1m to £10m |
+| `gte10m` | £10m or more |
+
+**`--since` / `--until`**: project start year, from 2006 to 2036.
+
+**`--fetch`**: which matches GtR returns first, before any local sorting:
+
+| Value | Meaning |
+|---|---|
+| `relevance` | Best match to the search terms (default) |
+| `recent` | Latest start date first |
+| `ending` | Latest end date first |
+| `value` | Highest award value first |
+
+**`--sort`**: order of rows in the CSV:
+
+| Value | Meaning |
+|---|---|
+| `score` | Highest keyword score first, then newest start date (default with scoring on) |
+| `recent` | Newest start date first |
+| `ending` | Latest end date first |
+| `value` | Highest award value first |
+| `gtr` | The order GtR returned (default with scoring off) |
+
 ## Examples
 
 Active Innovate UK projects in the North West, newest first:
