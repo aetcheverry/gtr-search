@@ -49,10 +49,19 @@ What happens to them:
 | `--compare FILES` | Add a `new` column (yes/no) against earlier result files, matched by grant reference or title |
 | `--out FILE` | Output file name |
 | `--refresh` | Ignore the cache and look everything up again |
+| `--list-values` | Show the funders, categories, regions etc. GtR has for these terms and filters, with counts, then stop (no CSV) |
 
 Defaults for most options can be changed at the top of the script. Run `python gtr_search.py -h` for the full list.
 
 ## Allowed values
+
+To see the values GtR currently has for your own search, with counts, use `--list-values`. It makes one small request per term and writes no CSV:
+
+```
+python gtr_search.py "water quality" "heavy metal" --funder all --list-values
+```
+
+Add `--funder all` to see every funder; otherwise only the default funder (EPSRC) is counted. Other filters narrow the lists too, e.g. adding `--funder "Innovate UK"` shows only the categories and regions within Innovate UK.
 
 Values are case-sensitive and must be typed as shown. Put lists in double quotes and separate items with commas, e.g. `--region "North West,Wales"`. Several values in one option mean "any of these"; different options combine as "all of these".
 

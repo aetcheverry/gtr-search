@@ -31,6 +31,8 @@ What happens to them:
     --compare FILES   add new=yes/no against earlier result files
     --out FILE        output file (default gtr_<date>_<first-term>.csv; never overwrites)
     --refresh         ignore the disk cache
+    --list-values     show the funders, categories, regions etc. GtR has for these terms
+                      and filters, with counts, then stop (no CSV)
 
 Run python gtr_search.py -h for the full list. Lookups are cached in gtr_cache_v3.json.
 No registration or API key is needed. GtR allows 10 requests per second; the script
@@ -427,6 +429,9 @@ def parse_args():
     o.add_argument("--compare", nargs="+", metavar="CSV", help="earlier result files to flag new projects against")
     o.add_argument("--out", help="output CSV (default: dated name that never overwrites)")
     o.add_argument("--refresh", action="store_true", help="ignore the disk cache")
+    o.add_argument("--list-values", action="store_true",
+                   help="list the funders, categories, regions etc. GtR has for these terms and "
+                        "filters, with counts, then stop (no CSV)")
     args = ap.parse_args()
 
     bad = [a for a in split_list(args.amount) if a not in AMOUNTS]
@@ -514,11 +519,60 @@ def search(terms, filters, pages, sortfield):
     return rows
 
 
+def list_values(terms, filters):
+    """Print the facet values (funder, category, region, ...) GtR reports for each search,
+    summed across the search terms. One small request per term; no CSV is written."""
+    totals, matches, failed = {}, 0, []
+    for term in terms:
+        data = None
+        for size in (1, 20):                       # tiny page; 20 if GtR refuses size=1
+            try:
+                data = get_json(awards_url(term, 1, size, filters, "score"))
+                break
+            except urllib.error.HTTPError as e:
+                if e.code != 400:
+                    print(f"  '{term}': request failed ({e})")
+                    break
+            except Exception as e:
+                print(f"  '{term}': request failed ({e})")
+                break
+        if data is None:
+            failed.append(term)
+            continue
+        n = (data.get("paging") or {}).get("totalSize", 0) or 0
+        matches += n
+        print(f"  '{term}': {n} matches")
+        for facet in data.get("facets") or []:
+            name = facet.get("facetName") or "?"
+            bucket = totals.setdefault(name, {})
+            for v in facet.get("values") or []:
+                key = str(v.get("value", ""))
+                bucket[key] = bucket.get(key, 0) + (v.get("count") or 0)
+        pause(PAUSE_PAGE)
+
+    if not totals:
+        print("GtR returned no value lists for these searches." if not failed else "No value lists retrieved.")
+        return
+    note = " (counts summed across terms, so a project matching two terms counts twice)" if len(terms) > 1 else ""
+    print(f"\n{matches} matches in total{note}.")
+    for name in sorted(totals):
+        values = sorted(totals[name].items(), key=lambda kv: (-kv[1], kv[0]))
+        print(f"\n{name}:")
+        for value, count in values:
+            print(f"  {count:>7}  {value}")
+    print('\nUse these exactly as shown, e.g. --category "Research Grant" or --funder "Innovate UK".')
+
+
 def main():
     args = parse_args()
     using_defaults = not args.terms
     terms = args.terms or DEFAULT_TERMS
     filters = build_filters(args)
+    if args.list_values:
+        shown = {k: (v if k != "year" else [f"{v[0]}-{v[-1]}"]) for k, v in filters.items()}
+        print("Filters:", "; ".join(f"{k}={', '.join(v)}" for k, v in shown.items()) or "none")
+        list_values(terms, filters)
+        return
     keywords = split_list(args.keywords) if args.keywords else DEFAULT_KEYWORDS
     exclude = split_list(args.exclude) if args.exclude is not None else EXCLUDE_PHRASES
     scorer = make_scorer(keywords, exclude) if args.score else None
