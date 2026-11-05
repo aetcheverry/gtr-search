@@ -1,0 +1,15 @@
+# Lookup cache (rebuilt automatically)
+gtr_cache*.json
+*.tmp
+
+# Search results (remove this line to keep CSVs in the repository)
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+
+# Windows and Office
+Thumbs.db
+desktop.ini
+~$*
