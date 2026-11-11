@@ -187,32 +187,12 @@ The file is UTF-8 with a byte-order mark, so Excel opens accented names correctl
 - **Data gaps.** Some records list no co-investigators even where the grant had them, and studentships (numeric references) have no PI.
 - **Co-investigators.** API v3 labels them `PROJECT_CO_LEAD_UK`. If GtR changes the label, the script prints the person link types it sees at the end of each run; adjust `COI_PATTERN` to match.
 
-## Building and releasing the app
-
-The app is `gtr_gui.py`, a Tkinter window that calls `gtr_search.py` (`run()` with options from `make_args()`), so the two always behave the same. It is packaged into a single `GtR-Search.exe` with [PyInstaller](https://pyinstaller.org/).
-
-**Automatic build (recommended):** the workflow in `.github/workflows/build-windows.yml` builds the .exe on a Windows machine at GitHub. To publish a new version:
-
-1. Update `__version__` at the top of `gtr_search.py` (e.g. `1.1.0`) and commit.
-2. Tag and push:
-   ```
-   git tag v1.1.0
-   git push origin v1.1.0
-   ```
-3. After a few minutes the release appears on the Releases page with `GtR-Search.exe` attached. You can also run the workflow by hand from the **Actions** tab; the .exe is then under that run's **Artifacts**.
-
-While the repository is private, only people with access to it can download releases.
-
-**Local build:** on a Windows PC with Python, double-click `build_exe.bat` (or run it from a terminal). The app appears in `dist\GtR-Search.exe`.
-
 ## Files
 
 | File | What it is |
 |---|---|
 | `gtr_search.py` | The search script (command line, and the engine behind the app) |
-| `gtr_gui.py` | The desktop window |
-| `build_exe.bat` | Builds `GtR-Search.exe` locally |
-| `.github/workflows/build-windows.yml` | Builds the .exe at GitHub and attaches it to releases |
+| `gtr_gui.py` | The desktop window; run with `python gtr_gui.py` (needs `gtr_search.py` in the same folder) |
 
 ## Data licence
 
