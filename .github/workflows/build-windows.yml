@@ -1,0 +1,43 @@
+# Builds GtR-Search.exe on a Windows machine at GitHub.
+# - Push a version tag (e.g. v1.0.0) to build it and attach it to a GitHub release.
+# - Or run it by hand from the Actions tab ("Run workflow"); the .exe is then under the run's Artifacts.
+name: Build Windows app
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: python -m pip install "pyinstaller==6.10.0"
+
+      - name: Check the scripts load
+        run: python -c "import gtr_search, gtr_gui; print('gtr_search', gtr_search.__version__)"
+
+      - name: Build GtR-Search.exe
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name "GtR-Search" gtr_gui.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GtR-Search-windows
+          path: dist/GtR-Search.exe
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/GtR-Search.exe
+          generate_release_notes: true

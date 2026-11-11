@@ -4,6 +4,26 @@ A command-line script that searches UKRI's [Gateway to Research](https://gtr.ukr
 
 It uses the GtR API v3 (launched November 2026). Plain Python 3.8+, standard library only, no API key.
 
+It comes in two forms:
+
+- **GtR Search app (Windows)**: a desktop window for people who don't use Python. Download `GtR-Search.exe` from the [Releases](../../releases) page and double-click it; nothing needs installing.
+- **`gtr_search.py`**: the command-line script, described from [Quick start](#quick-start) onwards.
+
+## The app
+
+Work through the numbered tabs, then click **Run search**:
+
+1. **Search terms**: one per line.
+2. **Filters**: funders, project status, start years, region, award type and value.
+3. **Options**: which matches to fetch first, pages per term, sort order, co-investigators, quick mode, and earlier result files to compare against.
+4. **Scoring**: the keywords used to rank results and the phrases to ignore.
+
+**Show available values** lists the funders, award types and regions GtR has for your terms and filters, with counts, without saving anything. Each input has a short note under it, and the **Help** tab explains every option.
+
+Results are saved as CSV files in `Documents\GtR Search` (changeable at the bottom of the window); **Open results** opens the latest one in Excel. The app also keeps its settings and lookup cache in that folder, so it remembers your last search and later runs are faster. **Stop** is safe: projects looked up so far are saved.
+
+The first time it runs, Windows may show "Windows protected your PC", because the app is not signed by a registered publisher. Click **More info** → **Run anyway**. If your organisation blocks unsigned programs, ask IT to allow it, or run `python gtr_gui.py` instead (needs Python, with `gtr_search.py` in the same folder).
+
 ## Quick start
 
 ```
@@ -48,6 +68,7 @@ What happens to them:
 | `--quick` | Skip the per-project lookups (no abstract, co-investigators, score or postcode); takes seconds |
 | `--compare FILES` | Add a `new` column (yes/no) against earlier result files, matched by grant reference or title |
 | `--out FILE` | Output file name |
+| `--out-dir FOLDER` | Folder for the output file (default: current folder) |
 | `--refresh` | Ignore the cache and look everything up again |
 | `--list-values` | Show the funders, categories, regions etc. GtR has for these terms and filters, with counts, then stop (no CSV) |
 
@@ -165,6 +186,33 @@ The file is UTF-8 with a byte-order mark, so Excel opens accented names correctl
 - **Rate limit.** GtR allows 10 requests per second. The script stays well below that, retries on timeouts and server errors, and slows down by itself after an HTTP 429 response.
 - **Data gaps.** Some records list no co-investigators even where the grant had them, and studentships (numeric references) have no PI.
 - **Co-investigators.** API v3 labels them `PROJECT_CO_LEAD_UK`. If GtR changes the label, the script prints the person link types it sees at the end of each run; adjust `COI_PATTERN` to match.
+
+## Building and releasing the app
+
+The app is `gtr_gui.py`, a Tkinter window that calls `gtr_search.py` (`run()` with options from `make_args()`), so the two always behave the same. It is packaged into a single `GtR-Search.exe` with [PyInstaller](https://pyinstaller.org/).
+
+**Automatic build (recommended):** the workflow in `.github/workflows/build-windows.yml` builds the .exe on a Windows machine at GitHub. To publish a new version:
+
+1. Update `__version__` at the top of `gtr_search.py` (e.g. `1.1.0`) and commit.
+2. Tag and push:
+   ```
+   git tag v1.1.0
+   git push origin v1.1.0
+   ```
+3. After a few minutes the release appears on the Releases page with `GtR-Search.exe` attached. You can also run the workflow by hand from the **Actions** tab; the .exe is then under that run's **Artifacts**.
+
+While the repository is private, only people with access to it can download releases.
+
+**Local build:** on a Windows PC with Python, double-click `build_exe.bat` (or run it from a terminal). The app appears in `dist\GtR-Search.exe`.
+
+## Files
+
+| File | What it is |
+|---|---|
+| `gtr_search.py` | The search script (command line, and the engine behind the app) |
+| `gtr_gui.py` | The desktop window |
+| `build_exe.bat` | Builds `GtR-Search.exe` locally |
+| `.github/workflows/build-windows.yml` | Builds the .exe at GitHub and attaches it to releases |
 
 ## Data licence
 

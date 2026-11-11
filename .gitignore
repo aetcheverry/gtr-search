@@ -13,3 +13,8 @@ __pycache__/
 Thumbs.db
 desktop.ini
 ~$*
+
+# App builds (PyInstaller)
+build/
+dist/
+*.spec

@@ -30,6 +30,7 @@ What happens to them:
                       score or postcode; much faster)
     --compare FILES   add new=yes/no against earlier result files
     --out FILE        output file (default gtr_<date>_<first-term>.csv; never overwrites)
+    --out-dir FOLDER  folder for the output file (default: current folder)
     --refresh         ignore the disk cache
     --list-values     show the funders, categories, regions etc. GtR has for these terms
                       and filters, with counts, then stop (no CSV)
@@ -38,6 +39,8 @@ Run python gtr_search.py -h for the full list. Lookups are cached in gtr_cache_v
 No registration or API key is needed. GtR allows 10 requests per second; the script
 stays well below that and slows down by itself if it gets HTTP 429 responses.
 """
+__version__ = "1.0.0"
+
 import argparse
 import csv
 import datetime
@@ -112,13 +115,53 @@ COLUMNS = ["grant_ref", "title", "pi", "co_investigators", "lead_organisation", 
            "lead_org_postcode", "lead_org_country", "project_partners"]
 
 
+# ---------------------------------------------------------------- output, stopping
+
+_logger = print               # replaced by the GUI to show messages in its window
+_stop = None                  # threading.Event set by the GUI's Stop button
+
+
+class Stopped(Exception):
+    """Raised when the GUI's Stop button is pressed."""
+
+
+def set_logger(fn):
+    global _logger
+    _logger = fn or print
+
+
+def log(*parts, sep=" ", end="\n"):
+    text = sep.join(str(p) for p in parts)
+    if _logger is print:
+        print(text, end=end)
+    else:
+        _logger(text)
+
+
+def check_stop():
+    if _stop is not None and _stop.is_set():
+        raise Stopped()
+
+
+def sleep(seconds):
+    """time.sleep that returns early (raising Stopped) when Stop is pressed."""
+    end = time.time() + seconds
+    while True:
+        check_stop()
+        left = end - time.time()
+        if left <= 0:
+            return
+        time.sleep(min(left, 0.2))
+
+
 # ---------------------------------------------------------------- network
 
+PAGE_SIZE_DEFAULT = PAGE_SIZE
 _slow = 1.0                   # current pause multiplier (raised by 429 responses)
 
 
 def pause(seconds):
-    time.sleep(seconds * _slow)
+    sleep(seconds * _slow)
 
 
 def _slow_down():
@@ -126,7 +169,7 @@ def _slow_down():
     new = min(_slow * SLOWDOWN_STEP, SLOWDOWN_MAX)
     if new > _slow:
         _slow = new
-        print(f"    Rate-limited: pauses now {_slow:.1f}x longer for the rest of this run.")
+        log(f"    Rate-limited: pauses now {_slow:.1f}x longer for the rest of this run.")
 
 
 def _retry_after(err):
@@ -163,8 +206,8 @@ def get_json(url):
             if attempt == RETRIES:
                 raise
             wait, msg = delay, str(e)
-        print(f"    {msg}; retrying in {wait}s (attempt {attempt + 2}/{RETRIES + 1})")
-        time.sleep(wait)
+        log(f"    {msg}; retrying in {wait}s (attempt {attempt + 2}/{RETRIES + 1})")
+        sleep(wait)
         delay *= 2
 
 
@@ -187,9 +230,9 @@ class Cache:
             try:
                 with open(path, encoding="utf-8") as f:
                     self.data = json.load(f)
-                print(f"Loaded {len(self.data)} cached lookups from {path}")
+                log(f"Loaded {len(self.data)} cached lookups from {path}")
             except (OSError, ValueError) as e:
-                print(f"  Could not read cache {path} ({e}); starting afresh.")
+                log(f"  Could not read cache {path} ({e}); starting afresh.")
 
     def get(self, key, lookup):
         if key in self.data:
@@ -304,14 +347,15 @@ def slugify(s, n=40):
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:n].strip("-") or "search"
 
 
-def default_outfile(terms, using_defaults):
+def default_outfile(terms, using_defaults, folder=None):
     date = datetime.date.today().isoformat()
     slug = "default-terms" if using_defaults else slugify(terms[0])
     if not using_defaults and len(terms) > 1:
         slug += f"-plus{len(terms) - 1}"
-    name, n = f"gtr_{date}_{slug}.csv", 2
+    folder = folder or ""
+    name, n = os.path.join(folder, f"gtr_{date}_{slug}.csv"), 2
     while os.path.exists(name):
-        name, n = f"gtr_{date}_{slug}_{n}.csv", n + 1
+        name, n = os.path.join(folder, f"gtr_{date}_{slug}_{n}.csv"), n + 1
     return name
 
 
@@ -352,14 +396,14 @@ def load_known(paths):
     refs, titles = set(), set()
     for path in paths:
         if not os.path.exists(path):
-            sys.exit(f"--compare: file not found: {path}")
+            raise FileNotFoundError(f"Comparison file not found: {path}")
         with open(path, newline="", encoding="utf-8-sig", errors="replace") as f:
             for row in csv.DictReader(f):
                 for field in ("grant_ref", "other_refs"):
                     refs.update(r.strip() for r in (row.get(field) or "").split(";") if r.strip())
                 if row.get("title"):
                     titles.add(norm_title(row["title"]))
-    print(f"Comparing against {len(refs)} grant refs from {len(paths)} earlier file(s).")
+    log(f"Comparing against {len(refs)} grant refs from {len(paths)} earlier file(s).")
     return refs, titles
 
 
@@ -379,7 +423,7 @@ def merge_duplicates(rows):
         r["other_refs"] = ""
         by_title[key] = r
         merged.append(r)
-    print(f"Removed {len(rows) - len(merged)} duplicate entries (same project at partner institutions); "
+    log(f"Removed {len(rows) - len(merged)} duplicate entries (same project at partner institutions); "
           f"{len(merged)} unique projects left.")
     return merged
 
@@ -397,7 +441,7 @@ def sort_rows(rows, how):
     # "gtr": keep the order GtR returned
 
 
-def parse_args():
+def build_parser():
     ap = argparse.ArgumentParser(description="Search UKRI Gateway to Research (API v3) and save a CSV.")
     ap.add_argument("terms", nargs="*", help="search terms (default: the built-in list)")
     g = ap.add_argument_group("which projects are fetched (filtered by GtR)")
@@ -428,25 +472,51 @@ def parse_args():
                    help="skip per-project lookups: no abstract, co-investigators, score or postcode")
     o.add_argument("--compare", nargs="+", metavar="CSV", help="earlier result files to flag new projects against")
     o.add_argument("--out", help="output CSV (default: dated name that never overwrites)")
+    o.add_argument("--out-dir", metavar="FOLDER", help="folder for the output CSV (default: current folder)")
     o.add_argument("--refresh", action="store_true", help="ignore the disk cache")
     o.add_argument("--list-values", action="store_true",
                    help="list the funders, categories, regions etc. GtR has for these terms and "
                         "filters, with counts, then stop (no CSV)")
-    args = ap.parse_args()
+    return ap
 
+
+def finalise_args(args):
+    """Check option combinations and fill in dependent defaults. Raises ValueError."""
     bad = [a for a in split_list(args.amount) if a not in AMOUNTS]
     if bad:
-        ap.error(f"--amount: unknown band(s) {', '.join(bad)}; use {', '.join(AMOUNTS)}")
+        raise ValueError(f"Unknown value band(s) {', '.join(bad)}; use {', '.join(AMOUNTS)}")
     if args.since and args.until and args.since > args.until:
-        ap.error("--since is later than --until")
+        raise ValueError("The 'since' start year is later than the 'until' start year.")
+    if args.pages < 1:
+        raise ValueError("Pages per term must be at least 1.")
     if args.quick:
         args.score, args.no_coi = False, True
     if args.sort is None:
         args.sort = "score" if args.score else "gtr"
     elif args.sort == "score" and not args.score:
-        print("Note: --sort score needs keyword scoring, which is off; sorting by most recent instead.")
+        log("Note: sorting by score needs keyword scoring, which is off; sorting by most recent instead.")
         args.sort = "recent"
     return args
+
+
+def parse_args():
+    ap = build_parser()
+    args = ap.parse_args()
+    try:
+        return finalise_args(args)
+    except ValueError as e:
+        ap.error(str(e))
+
+
+def make_args(**options):
+    """Options for run() without a command line (used by the GUI). Takes the same names as
+    the command-line options, e.g. make_args(terms=[...], funder="all", status="active")."""
+    args = build_parser().parse_args([])
+    for key, value in options.items():
+        if not hasattr(args, key) and key not in ("cache_file",):
+            raise TypeError(f"Unknown option: {key}")
+        setattr(args, key, value)
+    return finalise_args(args)
 
 
 def build_filters(args):
@@ -466,6 +536,11 @@ def build_filters(args):
     return filters
 
 
+def describe_filters(filters):
+    shown = {k: (v if k != "year" else [f"{v[0]}-{v[-1]}"]) for k, v in filters.items()}
+    return "; ".join(f"{k}={', '.join(v)}" for k, v in shown.items()) or "none"
+
+
 # ---------------------------------------------------------------- main
 
 def search(terms, filters, pages, sortfield):
@@ -474,19 +549,22 @@ def search(terms, filters, pages, sortfield):
     for term in terms:
         page = 1
         while page <= pages:
+            check_stop()
             try:
                 data = get_json(awards_url(term, page, PAGE_SIZE, filters, sortfield))
             except urllib.error.HTTPError as e:
                 detail = error_detail(e)
                 if e.code == 400 and PAGE_SIZE > 20 and not checked:
-                    print(f"  GtR refused page size {PAGE_SIZE} ({detail or 'HTTP 400'}); using 20 instead.")
+                    log(f"  GtR refused page size {PAGE_SIZE} ({detail or 'HTTP 400'}); using 20 instead.")
                     PAGE_SIZE, checked = 20, True
                     continue
                 if e.code != 404:
-                    print(f"  '{term}' page {page}: request failed ({e}{': ' + detail if detail else ''})")
+                    log(f"  '{term}' page {page}: request failed ({e}{': ' + detail if detail else ''})")
                 break
+            except Stopped:
+                raise
             except Exception as e:
-                print(f"  '{term}' page {page}: request failed ({e})")
+                log(f"  '{term}' page {page}: request failed ({e})")
                 break
             items = data.get("awardList") or []
             paging = data.get("paging") or {}
@@ -494,10 +572,10 @@ def search(terms, filters, pages, sortfield):
                 checked = True
                 got = paging.get("size")
                 if got and got != PAGE_SIZE:
-                    print(f"  Note: GtR returned pages of {got}, not {PAGE_SIZE}.")
+                    log(f"  Note: GtR returned pages of {got}, not {PAGE_SIZE}.")
                     PAGE_SIZE = got
                 if items and not (items[0].get("awardListItem") or {}).get("projectTitle"):
-                    print("  Unexpected response format. Keys returned:", sorted(items[0].keys()))
+                    log("  Unexpected response format. Keys returned:", sorted(items[0].keys()))
             if not items:
                 break
             kept = 0
@@ -509,7 +587,7 @@ def search(terms, filters, pages, sortfield):
                 rows.append(r)
                 kept += 1
             total = paging.get("totalSize", "?")
-            print(f"  '{term}' page {page}: {len(items)} projects, {kept} new kept ({total} matches in GtR)")
+            log(f"  '{term}' page {page}: {len(items)} projects, {kept} new kept ({total} matches in GtR)")
             # Past the last page GtR repeats the last page, so stop using its page count
             if page >= (paging.get("totalPages") or page) or page * PAGE_SIZE >= MAX_RESULTS:
                 break
@@ -519,11 +597,13 @@ def search(terms, filters, pages, sortfield):
     return rows
 
 
-def list_values(terms, filters):
-    """Print the facet values (funder, category, region, ...) GtR reports for each search,
-    summed across the search terms. One small request per term; no CSV is written."""
-    totals, matches, failed = {}, 0, []
+def collect_values(terms, filters):
+    """Facet values (funder, category, region, ...) GtR reports for each search, summed
+    across the search terms. One small request per term.
+    Returns {"per_term": {term: matches}, "matches": total, "facets": {name: [(value, count)]}}."""
+    totals, per_term, matches = {}, {}, 0
     for term in terms:
+        check_stop()
         data = None
         for size in (1, 20):                       # tiny page; 20 if GtR refuses size=1
             try:
@@ -531,17 +611,19 @@ def list_values(terms, filters):
                 break
             except urllib.error.HTTPError as e:
                 if e.code != 400:
-                    print(f"  '{term}': request failed ({e})")
+                    log(f"  '{term}': request failed ({e})")
                     break
+            except Stopped:
+                raise
             except Exception as e:
-                print(f"  '{term}': request failed ({e})")
+                log(f"  '{term}': request failed ({e})")
                 break
         if data is None:
-            failed.append(term)
             continue
         n = (data.get("paging") or {}).get("totalSize", 0) or 0
+        per_term[term] = n
         matches += n
-        print(f"  '{term}': {n} matches")
+        log(f"  '{term}': {n} matches")
         for facet in data.get("facets") or []:
             name = facet.get("facetName") or "?"
             bucket = totals.setdefault(name, {})
@@ -549,54 +631,87 @@ def list_values(terms, filters):
                 key = str(v.get("value", ""))
                 bucket[key] = bucket.get(key, 0) + (v.get("count") or 0)
         pause(PAUSE_PAGE)
+    facets = {name: sorted(vals.items(), key=lambda kv: (-kv[1], kv[0])) for name, vals in totals.items()}
+    return {"per_term": per_term, "matches": matches, "facets": facets}
 
-    if not totals:
-        print("GtR returned no value lists for these searches." if not failed else "No value lists retrieved.")
+
+def print_values(result, n_terms):
+    if not result["facets"]:
+        log("GtR returned no value lists for these searches." if result["per_term"] else "No value lists retrieved.")
         return
-    note = " (counts summed across terms, so a project matching two terms counts twice)" if len(terms) > 1 else ""
-    print(f"\n{matches} matches in total{note}.")
-    for name in sorted(totals):
-        values = sorted(totals[name].items(), key=lambda kv: (-kv[1], kv[0]))
-        print(f"\n{name}:")
-        for value, count in values:
-            print(f"  {count:>7}  {value}")
-    print('\nUse these exactly as shown, e.g. --category "Research Grant" or --funder "Innovate UK".')
+    note = " (counts summed across terms, so a project matching two terms counts twice)" if n_terms > 1 else ""
+    log(f"\n{result['matches']} matches in total{note}.")
+    for name in sorted(result["facets"]):
+        log(f"\n{name}:")
+        for value, count in result["facets"][name]:
+            log(f"  {count:>7}  {value}")
+    if _logger is print:
+        log('\nUse these exactly as shown, e.g. --category "Research Grant" or --funder "Innovate UK".')
 
 
-def main():
-    args = parse_args()
+def _print_progress(i, n, remaining, r):
+    title = r["title"][:45] + ("..." if len(r["title"]) > 45 else "")
+    log(f"  [{i}/{n}] {i * 100 // n:3d}%  ~{int(remaining // 60)}m{int(remaining % 60):02d}s left  "
+        f"{r['grant_ref'] or '-':<14} {r['pi'] or '?':<22.22} "
+        f"{r['lead_organisation'] or '?':<22.22} {title}")
+
+
+def run(args, progress=None, stop=None):
+    """Run a search (or a value listing) described by args, from parse_args() or make_args().
+
+    progress(i, n, seconds_left, row) is called after each project's lookups; without it,
+    progress lines are logged. stop is a threading.Event; setting it ends the run early.
+    Returns a dict with "outfile", "saved", "new", "dropped", "stopped" (and "values" for a
+    value listing). Raises FileNotFoundError if a comparison file is missing."""
+    global _stop, _slow, PAGE_SIZE
+    _stop, _slow, PAGE_SIZE = stop, 1.0, PAGE_SIZE_DEFAULT
+    result = {"outfile": None, "saved": 0, "new": None, "dropped": 0, "stopped": False, "values": None}
     using_defaults = not args.terms
     terms = args.terms or DEFAULT_TERMS
     filters = build_filters(args)
+
     if args.list_values:
-        shown = {k: (v if k != "year" else [f"{v[0]}-{v[-1]}"]) for k, v in filters.items()}
-        print("Filters:", "; ".join(f"{k}={', '.join(v)}" for k, v in shown.items()) or "none")
-        list_values(terms, filters)
-        return
+        log("Filters:", describe_filters(filters))
+        try:
+            result["values"] = collect_values(terms, filters)
+        except Stopped:
+            log("Stopped.")
+            result["stopped"] = True
+            return result
+        print_values(result["values"], len(terms))
+        return result
+
     keywords = split_list(args.keywords) if args.keywords else DEFAULT_KEYWORDS
     exclude = split_list(args.exclude) if args.exclude is not None else EXCLUDE_PHRASES
     scorer = make_scorer(keywords, exclude) if args.score else None
-    outfile = args.out or default_outfile(terms, using_defaults)
     known = load_known(args.compare) if args.compare else None
-    cache = Cache(CACHE_FILE, refresh=args.refresh)
+    if args.out_dir:
+        os.makedirs(args.out_dir, exist_ok=True)
+    outfile = (os.path.join(args.out_dir or "", args.out) if args.out
+               else default_outfile(terms, using_defaults, args.out_dir))
+    cache = Cache(getattr(args, "cache_file", None) or CACHE_FILE, refresh=args.refresh)
     coi_re = re.compile(COI_PATTERN, re.I)
 
-    shown = {k: (v if k != "year" else [f"{v[0]}-{v[-1]}"]) for k, v in filters.items()}
-    print("Filters:", "; ".join(f"{k}={', '.join(v)}" for k, v in shown.items()) or "none",
-          f"| fetching by {args.fetch} | sorting by {args.sort}")
+    log("Filters:", describe_filters(filters), f"| fetching by {args.fetch} | sorting by {args.sort}")
 
-    rows = search(terms, filters, args.pages, FETCH_FIELDS[args.fetch])
+    try:
+        rows = search(terms, filters, args.pages, FETCH_FIELDS[args.fetch])
+    except Stopped:
+        log("Stopped before any projects were looked up; no file written.")
+        result["stopped"] = True
+        return result
     if not rows:
-        print("No results. If every request failed, check your internet connection.")
-        return
+        log("No results. If every request failed, check your internet connection.")
+        return result
     rows = merge_duplicates(rows)
 
     n = len(rows)
-    print(f"Looking up abstracts, co-investigators and postcodes for {n} projects..."
-          if not args.quick else f"Quick mode: no per-project lookups for {n} projects.")
+    log(f"Looking up abstracts, co-investigators and postcodes for {n} projects..."
+        if not args.quick else f"Quick mode: no per-project lookups for {n} projects.")
     done, dropped, t0, person_rels = [], 0, time.time(), set()
     try:
         for i, r in enumerate(rows, 1):
+            check_stop()
             award_id, org_id, lead_id = r.pop("_id"), r.pop("_lead_org_id"), r.pop("_lead_person_id")
             # Backstop for the year filter (GtR filters by start year already)
             year = r["start"][:4]
@@ -630,17 +745,17 @@ def main():
                 r["new"] = ""
             done.append(r)
 
-            if not args.quick:
-                elapsed = time.time() - t0
-                remaining = elapsed / i * (n - i)
-                title = r["title"][:45] + ("..." if len(r["title"]) > 45 else "")
-                print(f"  [{i}/{n}] {i * 100 // n:3d}%  ~{int(remaining // 60)}m{int(remaining % 60):02d}s left  "
-                      f"{r['grant_ref'] or '-':<14} {r['pi'] or '?':<22.22} "
-                      f"{r['lead_organisation'] or '?':<22.22} {title}")
-                if i % 25 == 0:
-                    cache.save()
-    except KeyboardInterrupt:
-        print(f"\nStopped. Saving the {len(done)} projects looked up so far (re-runs reuse the cache).")
+            elapsed = time.time() - t0
+            remaining = elapsed / i * (n - i)
+            if progress:
+                progress(i, n, remaining, r)
+            elif not args.quick:
+                _print_progress(i, n, remaining, r)
+            if i % 25 == 0:
+                cache.save()
+    except (KeyboardInterrupt, Stopped):
+        log(f"\nStopped. Saving the {len(done)} projects looked up so far (re-runs reuse the cache).")
+        result["stopped"] = True
     finally:
         cache.save()
 
@@ -655,13 +770,27 @@ def main():
     if dropped:
         msg += f" ({dropped} dropped by the year check)"
     if known:
-        msg += f"; {sum(r['new'] == 'yes' for r in done)} new since the compared files"
-    print(msg + ".")
-    if person_rels:
-        print("  Person link types seen:", ", ".join(sorted(person_rels)))
-    if not args.quick and not args.no_coi and done and not any(r["co_investigators"] for r in done):
-        print("  Note: no co-investigators found. If a co-investigator type is listed above, "
-              "adjust COI_PATTERN to match it.")
+        result["new"] = sum(r["new"] == "yes" for r in done)
+        msg += f"; {result['new']} new since the compared files"
+    log(msg + ".")
+    if person_rels and _logger is print:          # diagnostics for the command line only
+        log("  Person link types seen:", ", ".join(sorted(person_rels)))
+    if (_logger is print and not args.quick and not args.no_coi and done
+            and not any(r["co_investigators"] for r in done)):
+        log("  Note: no co-investigators found. If a co-investigator type is listed above, "
+            "adjust COI_PATTERN to match it.")
+    result.update(outfile=outfile, saved=len(done), dropped=dropped)
+    return result
+
+
+def main():
+    args = parse_args()
+    try:
+        run(args)
+    except FileNotFoundError as e:
+        sys.exit(str(e))
+    except KeyboardInterrupt:
+        sys.exit("\nStopped before any projects were looked up; no file written.")
 
 
 if __name__ == "__main__":
